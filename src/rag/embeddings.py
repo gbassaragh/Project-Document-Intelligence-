@@ -243,5 +243,5 @@ class EmbeddingManager:
             )
 
         except Exception as e:
-            logger.error(f"Embedding pipeline failed: {e}")
+            logger.error(f"Embedding pipeline failed: {e}", exc_info=True)
             raise

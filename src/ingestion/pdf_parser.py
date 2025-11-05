@@ -132,7 +132,7 @@ class PDFParser:
             )
 
         except Exception as e:
-            logger.error(f"Failed to parse {file_path.name}: {e}")
+            logger.error(f"Failed to parse {file_path.name}: {e}", exc_info=True)
             raise
 
     def parse_all_pdfs(self) -> List[ParsedDocument]:
@@ -155,7 +155,7 @@ class PDFParser:
                 parsed_doc = self.parse_pdf(pdf_file)
                 parsed_documents.append(parsed_doc)
             except Exception as e:
-                logger.error(f"Skipping {pdf_file.name} due to error: {e}")
+                logger.error(f"Skipping {pdf_file.name} due to error: {e}", exc_info=True)
                 continue
 
         logger.info(f"Successfully parsed {len(parsed_documents)} documents")
@@ -328,5 +328,5 @@ class PDFParser:
             return documents
 
         except Exception as e:
-            logger.error(f"PDF parsing pipeline failed: {e}")
+            logger.error(f"PDF parsing pipeline failed: {e}", exc_info=True)
             raise

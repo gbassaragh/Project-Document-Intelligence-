@@ -57,7 +57,7 @@ class AsyncEntityExtractor:
     """Async entity extractor with concurrent processing and rate limiting."""
 
     def __init__(
-        self, connection: Neo4jConnection, max_concurrent: int = 10
+        self, connection: Neo4jConnection, max_concurrent: int = 10, worker_count: Optional[int] = None
     ) -> None:
         """
         Initialize async entity extractor.
@@ -65,10 +65,22 @@ class AsyncEntityExtractor:
         Args:
             connection: Neo4j connection instance
             max_concurrent: Maximum number of concurrent API requests
+            worker_count: Number of worker coroutines for bounded pool (default: max_concurrent)
+                         Valid range: 1-50. Workers provide backpressure for large chunk sets.
+
+        Raises:
+            ValueError: If worker_count is outside valid range
         """
         self.connection = connection
         self.settings = get_settings()
         self.max_concurrent = max_concurrent
+
+        # Configure worker pool size with validation
+        self.worker_count = worker_count if worker_count is not None else max_concurrent
+        if self.worker_count < 1 or self.worker_count > 50:
+            raise ValueError(
+                f"worker_count must be between 1 and 50, got {self.worker_count}"
+            )
 
         # Initialize async LLM (ChatOpenAI supports async methods in newer versions)
         self.async_llm = ChatOpenAI(
@@ -197,11 +209,80 @@ Return the extracted entities and relationships in the specified JSON format.
                 # Return empty result for non-transient errors
                 return ExtractionResult(entities=[], relationships=[])
 
+    async def _process_single_chunk(self, chunk: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Process a single chunk and return extraction result.
+
+        Args:
+            chunk: Chunk data with chunk_id and text fields
+
+        Returns:
+            Extraction result dictionary with chunk_id, entities, and relationships
+        """
+        async with self.stats_lock:
+            self.stats["total_processed"] += 1
+
+        extraction = await self._extract_with_retry(
+            chunk["text"], chunk["chunk_id"]
+        )
+
+        return {
+            "chunk_id": chunk["chunk_id"],
+            "entities": [e.dict() for e in extraction.entities],
+            "relationships": [r.dict() for r in extraction.relationships],
+        }
+
+    async def _worker(
+        self,
+        worker_id: int,
+        input_queue: asyncio.Queue,
+        output_queue: asyncio.Queue,
+        progress_bar: Any,
+        progress_lock: asyncio.Lock,
+    ) -> None:
+        """
+        Worker coroutine that processes chunks from input queue.
+
+        Args:
+            worker_id: Unique identifier for this worker (for logging)
+            input_queue: Queue containing chunks to process
+            output_queue: Queue for storing results
+            progress_bar: tqdm progress bar instance
+            progress_lock: Lock for thread-safe progress updates
+        """
+        while True:
+            chunk = await input_queue.get()
+
+            # None sentinel signals worker to exit
+            if chunk is None:
+                input_queue.task_done()
+                break
+
+            try:
+                result = await self._process_single_chunk(chunk)
+                await output_queue.put(result)
+
+                # Update progress bar with lock protection
+                async with progress_lock:
+                    progress_bar.update(1)
+
+            except Exception as e:
+                # Log unexpected worker errors but continue processing
+                logger.error(
+                    f"Worker {worker_id} encountered unexpected error: {e}",
+                    exc_info=True,
+                )
+            finally:
+                input_queue.task_done()
+
     async def extract_from_chunks_async(
         self, chunk_ids: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """
-        Extract entities from chunks using async concurrent processing.
+        Extract entities from chunks using bounded worker pool for efficient processing.
+
+        Uses queue-based backpressure to prevent memory exhaustion with large chunk sets.
+        Workers pull chunks from input queue, process them, and place results in output queue.
 
         Args:
             chunk_ids: Optional list of specific chunk IDs to process
@@ -209,7 +290,7 @@ Return the extracted entities and relationships in the specified JSON format.
         Returns:
             List of extraction results with chunk IDs
         """
-        logger.info("Starting async entity extraction...")
+        logger.info("Starting async entity extraction with bounded worker pool...")
 
         # Query chunks from Neo4j
         if chunk_ids:
@@ -227,7 +308,8 @@ Return the extracted entities and relationships in the specified JSON format.
             chunks = self.connection.execute_query(query)
 
         logger.info(
-            f"Processing {len(chunks)} chunks with {self.max_concurrent} concurrent requests..."
+            f"Processing {len(chunks)} chunks with {self.worker_count} workers "
+            f"({self.max_concurrent} max concurrent API requests)..."
         )
 
         # Reset statistics
@@ -238,25 +320,49 @@ Return the extracted entities and relationships in the specified JSON format.
             "retries": 0,
         }
 
-        # Create extraction tasks
-        async def extract_chunk(chunk: Dict[str, Any]) -> Dict[str, Any]:
-            """Extract entities from a single chunk."""
-            async with self.stats_lock:
-                self.stats["total_processed"] += 1
-            extraction = await self._extract_with_retry(
-                chunk["text"], chunk["chunk_id"]
-            )
-            return {
-                "chunk_id": chunk["chunk_id"],
-                "entities": [e.dict() for e in extraction.entities],
-                "relationships": [r.dict() for r in extraction.relationships],
-            }
+        # Create queues with bounded input queue for backpressure
+        input_queue = asyncio.Queue(maxsize=self.worker_count * 2)
+        output_queue = asyncio.Queue()  # Unbounded for results
 
-        # Execute all extractions concurrently with progress bar
-        tasks = [extract_chunk(chunk) for chunk in chunks]
-        results = await tqdm_asyncio.gather(
-            *tasks, desc="Extracting entities (async)"
-        )
+        # Create progress bar and lock
+        from tqdm.asyncio import tqdm
+        progress_bar = tqdm(total=len(chunks), desc="Extracting entities (worker pool)")
+        progress_lock = asyncio.Lock()
+
+        # Start worker coroutines
+        workers = [
+            asyncio.create_task(
+                self._worker(i, input_queue, output_queue, progress_bar, progress_lock)
+            )
+            for i in range(self.worker_count)
+        ]
+
+        # Producer: Add chunks to input queue
+        async def producer():
+            """Feed chunks into input queue."""
+            for chunk in chunks:
+                await input_queue.put(chunk)
+            # Send termination sentinels (one per worker)
+            for _ in range(self.worker_count):
+                await input_queue.put(None)
+
+        # Start producer
+        producer_task = asyncio.create_task(producer())
+
+        # Wait for all work to complete
+        await producer_task
+        await input_queue.join()  # Wait for queue to be fully processed
+
+        # Wait for all workers to finish
+        await asyncio.gather(*workers)
+
+        # Close progress bar
+        progress_bar.close()
+
+        # Collect all results from output queue
+        results = []
+        while not output_queue.empty():
+            results.append(await output_queue.get())
 
         # Log statistics
         logger.info(
@@ -410,5 +516,5 @@ Return the extracted entities and relationships in the specified JSON format.
             logger.info("Async entity extraction pipeline completed successfully")
 
         except Exception as e:
-            logger.error(f"Async entity extraction pipeline failed: {e}")
+            logger.error(f"Async entity extraction pipeline failed: {e}", exc_info=True)
             raise

@@ -139,7 +139,7 @@ Return the extracted entities and relationships in the specified JSON format.
             return result
 
         except Exception as e:
-            logger.error(f"Extraction failed: {e}")
+            logger.error(f"Extraction failed: {e}", exc_info=True)
             # Return empty result on failure
             return ExtractionResult(entities=[], relationships=[])
 
@@ -338,7 +338,7 @@ Return the extracted entities and relationships in the specified JSON format.
                     f"Async extraction not available ({e}). Falling back to sync version."
                 )
             except Exception as e:
-                logger.error(f"Async extraction failed: {e}. Falling back to sync version.")
+                logger.error(f"Async extraction failed: {e}. Falling back to sync version.", exc_info=True)
 
         # Fallback to sync version
         logger.info("Starting entity extraction pipeline (sync mode)...")
@@ -356,5 +356,5 @@ Return the extracted entities and relationships in the specified JSON format.
             logger.info("Entity extraction pipeline completed successfully")
 
         except Exception as e:
-            logger.error(f"Entity extraction pipeline failed: {e}")
+            logger.error(f"Entity extraction pipeline failed: {e}", exc_info=True)
             raise

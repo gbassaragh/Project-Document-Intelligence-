@@ -366,7 +366,7 @@ class StructuredDataIngestion:
             logger.info("Structured data ingestion pipeline completed successfully")
 
         except Exception as e:
-            logger.error(f"Structured data ingestion failed: {e}")
+            logger.error(f"Structured data ingestion failed: {e}", exc_info=True)
             raise
         finally:
             self.close()
