@@ -130,22 +130,67 @@ class StructuredDataIngestion:
 
     def load_all_files(self) -> None:
         """
-        Load all Excel and CSV files from the structured data directory.
-        Expects files named: projects.xlsx, teams.xlsx, managers.xlsx, etc.
+        Load configured Excel and CSV files from the structured data directory.
+
+        Uses explicit file mappings from configuration instead of loading all files.
+        This prevents accidental ingestion of wrong files and provides clear schema validation.
         """
         if not self.data_dir.exists():
             logger.warning(f"Structured data directory does not exist: {self.data_dir}")
             return
 
-        # Load Excel files
-        for excel_file in self.data_dir.glob("*.xlsx"):
-            table_name = excel_file.stem.lower()
-            self.load_excel_to_duckdb(excel_file, table_name)
+        # Get file mappings from configuration
+        file_mappings = self.settings.structured_data_ingestion.file_mappings
 
-        # Load CSV files
-        for csv_file in self.data_dir.glob("*.csv"):
-            table_name = csv_file.stem.lower()
-            self.load_csv_to_duckdb(csv_file, table_name)
+        if not file_mappings:
+            logger.warning("No file mappings configured in settings. Skipping ingestion.")
+            return
+
+        # Track which configured files were found
+        files_found = []
+        files_missing = []
+
+        for filename, mapping in file_mappings.items():
+            file_path = self.data_dir / filename
+
+            if not file_path.exists():
+                files_missing.append(filename)
+                logger.debug(f"Configured file not found: {filename}")
+                continue
+
+            files_found.append(filename)
+
+            try:
+                # Validate table name before loading
+                self._validate_table_name(mapping.table_name)
+
+                # Load based on file extension
+                if filename.endswith('.xlsx'):
+                    self.load_excel_to_duckdb(file_path, mapping.table_name)
+                elif filename.endswith('.csv'):
+                    self.load_csv_to_duckdb(file_path, mapping.table_name)
+                else:
+                    logger.warning(f"Unsupported file type: {filename}")
+                    continue
+
+                logger.info(
+                    f"Loaded {filename} → table '{mapping.table_name}' "
+                    f"(entity type: {mapping.entity_type})"
+                )
+
+            except Exception as e:
+                logger.error(
+                    f"Failed to load {filename}: {e}. Skipping file.",
+                    exc_info=True
+                )
+                continue
+
+        # Log summary
+        logger.info(
+            f"File loading completed: {len(files_found)}/{len(file_mappings)} files loaded"
+        )
+        if files_missing:
+            logger.info(f"Files not found: {', '.join(files_missing)}")
 
     def query_duckdb(self, query: str) -> pd.DataFrame:
         """
@@ -204,36 +249,77 @@ class StructuredDataIngestion:
 
     def ingest_persons(self) -> None:
         """
-        Ingest person data into Neo4j.
-        Expects a table with columns: name, role
+        Ingest person data into Neo4j from configured tables.
+
+        Uses explicit configuration mapping to identify Person entity tables.
+        No heuristic table name matching.
         """
         logger.info("Ingesting persons into Neo4j...")
 
-        # Try to find persons/people/managers table
-        tables = self.duckdb_conn.execute("SHOW TABLES").fetchall()
-        table_name = None
-        for table in tables:
-            table_str = str(table).lower()
-            if any(name in table_str for name in ["person", "people", "manager", "employee"]):
-                # Extract actual table name
-                table_name = table[0] if isinstance(table, tuple) else table
-                break
+        # Get file mappings from configuration
+        file_mappings = self.settings.structured_data_ingestion.file_mappings
 
-        if not table_name:
-            logger.warning("No persons/managers table found in DuckDB")
+        # Find all tables configured as Person entities
+        person_tables = []
+        for filename, mapping in file_mappings.items():
+            if mapping.entity_type == "Person":
+                person_tables.append(mapping.table_name)
+
+        if not person_tables:
+            logger.warning("No Person entity tables configured in settings")
             return
 
-        # Validate table name for safe SQL construction
-        self._validate_table_name(table_name)
+        # Check which tables actually exist in DuckDB
+        existing_tables = self.duckdb_conn.execute("SHOW TABLES").fetchall()
+        existing_table_names = {
+            table[0] if isinstance(table, tuple) else table
+            for table in existing_tables
+        }
 
-        # Query all persons
-        persons_df = self.query_duckdb(f"""
-            SELECT DISTINCT
-                name,
-                COALESCE(role, 'Unknown') as role
-            FROM {table_name}
-            WHERE name IS NOT NULL
-        """)
+        # Filter to only tables that exist
+        available_person_tables = [
+            table for table in person_tables
+            if table in existing_table_names
+        ]
+
+        if not available_person_tables:
+            logger.warning(
+                f"Configured Person tables not found in DuckDB: {person_tables}"
+            )
+            return
+
+        # Query all persons from available tables
+        all_persons = []
+        for table_name in available_person_tables:
+            # Validate table name for safe SQL construction
+            self._validate_table_name(table_name)
+
+            try:
+                persons_df = self.query_duckdb(f"""
+                    SELECT DISTINCT
+                        name,
+                        COALESCE(role, 'Unknown') as role
+                    FROM {table_name}
+                    WHERE name IS NOT NULL
+                """)
+                all_persons.append(persons_df)
+                logger.debug(
+                    f"Queried {len(persons_df)} persons from table '{table_name}'"
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to query persons from table '{table_name}': {e}",
+                    exc_info=True
+                )
+                continue
+
+        if not all_persons:
+            logger.warning("No person data retrieved from configured tables")
+            return
+
+        # Combine all person data
+        import pandas as pd
+        persons_df = pd.concat(all_persons, ignore_index=True).drop_duplicates()
 
         if persons_df.empty:
             logger.warning("No person data to ingest")
@@ -256,24 +342,77 @@ class StructuredDataIngestion:
 
     def ingest_teams(self) -> None:
         """
-        Ingest team data and team membership relationships.
-        Expects a 'teams' table with columns: team_name, member_name
+        Ingest team data and team membership relationships from configured tables.
+
+        Uses explicit configuration mapping to identify Team entity tables.
+        No heuristic table name matching.
         """
         logger.info("Ingesting teams into Neo4j...")
 
-        tables = self.duckdb_conn.execute("SHOW TABLES").fetchall()
-        if not any("team" in str(table).lower() for table in tables):
-            logger.warning("No 'teams' table found in DuckDB")
+        # Get file mappings from configuration
+        file_mappings = self.settings.structured_data_ingestion.file_mappings
+
+        # Find all tables configured as Team entities
+        team_tables = []
+        for filename, mapping in file_mappings.items():
+            if mapping.entity_type == "Team":
+                team_tables.append(mapping.table_name)
+
+        if not team_tables:
+            logger.warning("No Team entity tables configured in settings")
             return
 
-        # Query all teams and memberships
-        teams_df = self.query_duckdb("""
-            SELECT DISTINCT
-                team_name,
-                member_name
-            FROM teams
-            WHERE team_name IS NOT NULL AND member_name IS NOT NULL
-        """)
+        # Check which tables actually exist in DuckDB
+        existing_tables = self.duckdb_conn.execute("SHOW TABLES").fetchall()
+        existing_table_names = {
+            table[0] if isinstance(table, tuple) else table
+            for table in existing_tables
+        }
+
+        # Filter to only tables that exist
+        available_team_tables = [
+            table for table in team_tables
+            if table in existing_table_names
+        ]
+
+        if not available_team_tables:
+            logger.warning(
+                f"Configured Team tables not found in DuckDB: {team_tables}"
+            )
+            return
+
+        # Query all teams from available tables
+        all_teams = []
+        for table_name in available_team_tables:
+            # Validate table name for safe SQL construction
+            self._validate_table_name(table_name)
+
+            try:
+                teams_df = self.query_duckdb(f"""
+                    SELECT DISTINCT
+                        team_name,
+                        member_name
+                    FROM {table_name}
+                    WHERE team_name IS NOT NULL AND member_name IS NOT NULL
+                """)
+                all_teams.append(teams_df)
+                logger.debug(
+                    f"Queried {len(teams_df)} team memberships from table '{table_name}'"
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to query teams from table '{table_name}': {e}",
+                    exc_info=True
+                )
+                continue
+
+        if not all_teams:
+            logger.warning("No team data retrieved from configured tables")
+            return
+
+        # Combine all team data
+        import pandas as pd
+        teams_df = pd.concat(all_teams, ignore_index=True).drop_duplicates()
 
         if teams_df.empty:
             logger.warning("No team data to ingest")

@@ -5,7 +5,7 @@ Loads all settings from .env file using python-dotenv.
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, List
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator
@@ -95,6 +95,61 @@ class LoggingConfig(BaseModel):
         return v
 
 
+class FileMapping(BaseModel):
+    """Mapping configuration for a single structured data file."""
+
+    table_name: str = Field(description="Target table name in DuckDB")
+    entity_type: str = Field(description="Entity type for Neo4j ingestion (e.g., 'Person', 'Project')")
+    required_columns: List[str] = Field(
+        default_factory=list,
+        description="List of required column names"
+    )
+
+
+class StructuredDataIngestionConfig(BaseModel):
+    """Configuration for structured data ingestion pipeline.
+
+    Replaces brittle heuristic-based table discovery with explicit file-to-table mapping.
+    """
+
+    file_mappings: Dict[str, FileMapping] = Field(
+        default_factory=lambda: {
+            # Default mappings for common file patterns
+            "projects.xlsx": FileMapping(
+                table_name="projects",
+                entity_type="Project",
+                required_columns=["id", "name"]
+            ),
+            "projects.csv": FileMapping(
+                table_name="projects",
+                entity_type="Project",
+                required_columns=["id", "name"]
+            ),
+            "managers.xlsx": FileMapping(
+                table_name="managers",
+                entity_type="Person",
+                required_columns=["name"]
+            ),
+            "managers.csv": FileMapping(
+                table_name="managers",
+                entity_type="Person",
+                required_columns=["name"]
+            ),
+            "teams.xlsx": FileMapping(
+                table_name="teams",
+                entity_type="Team",
+                required_columns=["team_name", "member_name"]
+            ),
+            "teams.csv": FileMapping(
+                table_name="teams",
+                entity_type="Team",
+                required_columns=["team_name", "member_name"]
+            ),
+        },
+        description="Mapping from file names to their DuckDB table configuration"
+    )
+
+
 class Settings(BaseModel):
     """Main settings class combining all configurations."""
 
@@ -103,6 +158,9 @@ class Settings(BaseModel):
     data: DataConfig = Field(default_factory=DataConfig)
     processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    structured_data_ingestion: StructuredDataIngestionConfig = Field(
+        default_factory=StructuredDataIngestionConfig
+    )
 
 
 # Global settings instance
