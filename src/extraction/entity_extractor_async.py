@@ -84,7 +84,8 @@ class AsyncEntityExtractor:
         # Semaphore for rate limiting
         self.semaphore = asyncio.Semaphore(max_concurrent)
 
-        # Statistics
+        # Statistics with thread-safe lock for concurrent access
+        self.stats_lock = asyncio.Lock()
         self.stats = {
             "total_processed": 0,
             "successful": 0,
@@ -172,7 +173,8 @@ Return the extracted entities and relationships in the specified JSON format.
                 parser = PydanticOutputParser(pydantic_object=ExtractionResult)
                 result = parser.parse(response.content)
 
-                self.stats["successful"] += 1
+                async with self.stats_lock:
+                    self.stats["successful"] += 1
                 return result
 
             except (
@@ -181,15 +183,17 @@ Return the extracted entities and relationships in the specified JSON format.
                 openai.APIConnectionError,
             ) as e:
                 # Transient errors - retry will handle
-                self.stats["retries"] += 1
+                async with self.stats_lock:
+                    self.stats["retries"] += 1
                 logger.warning(
                     f"Transient error for chunk {chunk_id}: {e}. Retrying..."
                 )
                 raise
             except Exception as e:
                 # Critical errors - don't retry
-                self.stats["failed"] += 1
-                logger.error(f"Critical extraction error for chunk {chunk_id}: {e}")
+                async with self.stats_lock:
+                    self.stats["failed"] += 1
+                logger.error(f"Critical extraction error for chunk {chunk_id}: {e}", exc_info=True)
                 # Return empty result for non-transient errors
                 return ExtractionResult(entities=[], relationships=[])
 
@@ -237,7 +241,8 @@ Return the extracted entities and relationships in the specified JSON format.
         # Create extraction tasks
         async def extract_chunk(chunk: Dict[str, Any]) -> Dict[str, Any]:
             """Extract entities from a single chunk."""
-            self.stats["total_processed"] += 1
+            async with self.stats_lock:
+                self.stats["total_processed"] += 1
             extraction = await self._extract_with_retry(
                 chunk["text"], chunk["chunk_id"]
             )

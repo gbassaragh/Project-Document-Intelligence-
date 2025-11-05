@@ -4,6 +4,7 @@ Processes Excel and CSV files containing project data, team rosters, and manager
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
@@ -48,6 +49,35 @@ class StructuredDataIngestion:
         self.close()
         return False  # Don't suppress exceptions
 
+    def _validate_table_name(self, table_name: str) -> None:
+        """
+        Validate table name for safe usage in SQL queries.
+
+        This function validates table names used in dynamic SQL queries as a
+        defense-in-depth measure to prevent SQL injection.
+
+        Args:
+            table_name: Table name to validate
+
+        Raises:
+            ValueError: If table name contains invalid characters
+
+        Example:
+            >>> self._validate_table_name("projects")  # OK
+            >>> self._validate_table_name("'; DROP TABLE")  # Raises ValueError
+        """
+        if not table_name:
+            raise ValueError("Table name cannot be empty")
+
+        # Allow only safe characters for SQL identifiers
+        # Must start with letter or underscore, followed by alphanumeric or underscore
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
+            raise ValueError(
+                f"Invalid table name format: '{table_name}'. "
+                f"Table names must start with a letter or underscore and contain "
+                f"only alphanumeric characters and underscores."
+            )
+
     def load_excel_to_duckdb(self, file_path: Path, table_name: str) -> None:
         """
         Load Excel file into DuckDB table.
@@ -58,13 +88,19 @@ class StructuredDataIngestion:
         """
         logger.info(f"Loading {file_path.name} into DuckDB table '{table_name}'...")
         try:
+            # Validate table name before registration
+            self._validate_table_name(table_name)
+
             df = pd.read_excel(file_path)
             self.duckdb_conn.register(table_name, df)
             logger.info(
                 f"Loaded {len(df)} rows from {file_path.name} into '{table_name}'"
             )
+        except (pd.errors.EmptyDataError, FileNotFoundError) as e:
+            logger.error(f"Failed to load {file_path}: {e}", exc_info=True)
+            raise
         except Exception as e:
-            logger.error(f"Failed to load {file_path}: {e}")
+            logger.error(f"Unexpected error loading {file_path}: {e}", exc_info=True)
             raise
 
     def load_csv_to_duckdb(self, file_path: Path, table_name: str) -> None:
@@ -77,13 +113,19 @@ class StructuredDataIngestion:
         """
         logger.info(f"Loading {file_path.name} into DuckDB table '{table_name}'...")
         try:
+            # Validate table name before registration
+            self._validate_table_name(table_name)
+
             df = pd.read_csv(file_path)
             self.duckdb_conn.register(table_name, df)
             logger.info(
                 f"Loaded {len(df)} rows from {file_path.name} into '{table_name}'"
             )
+        except (pd.errors.EmptyDataError, FileNotFoundError) as e:
+            logger.error(f"Failed to load {file_path}: {e}", exc_info=True)
+            raise
         except Exception as e:
-            logger.error(f"Failed to load {file_path}: {e}")
+            logger.error(f"Unexpected error loading {file_path}: {e}", exc_info=True)
             raise
 
     def load_all_files(self) -> None:
@@ -180,6 +222,9 @@ class StructuredDataIngestion:
         if not table_name:
             logger.warning("No persons/managers table found in DuckDB")
             return
+
+        # Validate table name for safe SQL construction
+        self._validate_table_name(table_name)
 
         # Query all persons
         persons_df = self.query_duckdb(f"""

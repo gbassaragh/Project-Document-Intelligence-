@@ -4,6 +4,8 @@ Provides connection pooling and session management for the GraphRAG system.
 """
 
 import logging
+import re
+import threading
 from typing import Any, Dict, List, Optional
 
 from neo4j import GraphDatabase, Driver
@@ -44,7 +46,6 @@ def validate_identifier(identifier: str, max_length: int = 64) -> None:
         )
 
     # Allow only safe characters for Neo4j identifiers
-    import re
     if not re.match(r'^[a-zA-Z0-9_-]+$', identifier):
         raise ValueError(
             f"Invalid identifier format: '{identifier}'. "
@@ -206,21 +207,28 @@ class Neo4jConnection:
             return False
 
 
-# Global connection instance
+# Global connection instance with thread-safe initialization
 _connection: Optional[Neo4jConnection] = None
+_connection_lock = threading.Lock()
 
 
 def get_connection() -> Neo4jConnection:
     """
-    Get or create the global Neo4j connection instance.
+    Get or create the global Neo4j connection instance with thread-safe initialization.
+
+    Uses double-checked locking pattern to ensure thread safety without
+    excessive locking overhead.
 
     Returns:
         Neo4jConnection instance
     """
     global _connection
     if _connection is None:
-        _connection = Neo4jConnection()
-        _connection.connect()
+        with _connection_lock:
+            # Double-check locking: verify connection is still None inside the lock
+            if _connection is None:
+                _connection = Neo4jConnection()
+                _connection.connect()
     return _connection
 
 
