@@ -1,0 +1,43 @@
+[flake8]
+# Flake8 configuration for PEP 8 compliance
+
+# Maximum line length
+max-line-length = 100
+
+# Exclude patterns
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    env,
+    ENV,
+    .eggs,
+    *.egg,
+    dist,
+    build,
+    .tox,
+    .mypy_cache,
+    .pytest_cache,
+    htmlcov
+
+# Ignore specific errors
+ignore =
+    E203,
+    E501,
+    W503,
+    W504
+
+# Per-file ignores
+per-file-ignores =
+    __init__.py:F401,F403
+    tests/*:F401,F811
+
+# Select specific error codes to check
+select = C,E,F,W,B,B950
+
+# Maximum complexity
+max-complexity = 15
+
+# Docstring conventions
+docstring-convention = google
