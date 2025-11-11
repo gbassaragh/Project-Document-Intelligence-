@@ -1,0 +1,75 @@
+You are analyzing a Project Authorization Form (PAF) document. Extract information with HIGH PRECISION and provide CONFIDENCE SCORES (1-10 scale) for each field.
+
+**HEADER FIELDS [REQUIRED]:**
+- Project Number: Look for "Project Number", "Project ID", or similar field at document top
+- Project Title: Main project name/title (usually bold or prominent)
+- Company: Operating company name (e.g., "Eversource NH", "NSTAR Electric")
+
+**HEADER FIELDS [OPTIONAL]:**
+- Project Manager: Name of person managing project (look for "Project Manager" label)
+- Project Sponsor: Name of executive sponsor (look for "Sponsor" or "Executive Sponsor")
+- Project Initiator: Person who initiated the project (look for "Initiator" or "Requested By")
+
+**FINANCIAL DATA (Extract from [5] Cost and Funding section):**
+- Total Capital Request: Total dollar amount requested (look for "Total Request", "Total Cost", "Capital Request")
+- Year 1 Cost: First year expenditure
+- Year 2 Cost: Second year expenditure
+- Year 3 Cost: Third year expenditure
+- Contingency Percent: Contingency as percentage (e.g., "15% contingency")
+- Funding Source: "internal", "external", or "mixed"
+
+**CONTENT SECTIONS [REQUIRED]:**
+- Section [3] Project Scope: Extract the ENTIRE text of section 3, including all subsections and bullets
+- Section [5] Cost and Funding: Extract the ENTIRE text of section 5, including all financial tables
+
+**REVISION HISTORY:**
+Extract all revisions from revision history table. For each revision, extract:
+- Version: "Rev 1", "Rev 2", "Rev A", etc.
+- Date: Revision date (YYYY-MM-DD format preferred)
+- Description: Brief description of changes
+
+**CONFIDENCE SCORING INSTRUCTIONS:**
+For each field, provide a confidence score 1-10 where:
+- 10: Field explicitly present with clear label, no ambiguity
+- 7-9: Field present but label unclear or value requires interpretation
+- 4-6: Field possibly present but significant uncertainty
+- 1-3: Field not found or highly ambiguous
+
+**OUTPUT FORMAT:**
+Return valid JSON matching this exact structure:
+{
+  "project_number": "string",
+  "project_title": "string",
+  "company": "string",
+  "project_manager": "string or null",
+  "project_sponsor": "string or null",
+  "project_initiator": "string or null",
+  "scope_text": "full text of section 3",
+  "cost_text": "full text of section 5",
+  "cost_breakdown": {
+    "total_request": float or null,
+    "year_1_cost": float or null,
+    "year_2_cost": float or null,
+    "year_3_cost": float or null,
+    "contingency_percent": float or null,
+    "funding_source": "string or null"
+  },
+  "revisions": [
+    {"version": "string", "date": "string or null", "description": "string or null"}
+  ],
+  "confidence_scores": {
+    "project_number": int (1-10),
+    "project_title": int (1-10),
+    "company": int (1-10),
+    "project_manager": int (1-10),
+    "project_sponsor": int (1-10),
+    "project_initiator": int (1-10),
+    "scope_text": int (1-10),
+    "cost_text": int (1-10)
+  }
+}
+
+**IMPORTANT:**
+- Return ONLY valid JSON, no additional text
+- If a field is not found, use null (not empty string)
+- Be conservative with confidence scores - uncertainty is acceptable

@@ -75,3 +75,4 @@ dmypy.json
 *.swp
 .cache/
 Project_Document_Intelligence/
+docs/

@@ -15,7 +15,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 from src.config.settings import get_settings
 from src.database.connection import get_connection, close_connection
 from src.database.schema import SchemaManager
-from src.ingestion.structured_data import StructuredDataIngestion
 from src.ingestion.pdf_parser import PDFParser
 from src.extraction.entity_extractor import EntityExtractor
 from src.rag.embeddings import EmbeddingManager
@@ -60,18 +59,6 @@ def initialize_database() -> None:
     )
 
     logger.info("Database schema initialized successfully")
-
-
-def ingest_structured_data() -> None:
-    """Ingest structured data from Excel/CSV files."""
-    logger = logging.getLogger(__name__)
-    logger.info("Starting structured data ingestion...")
-
-    connection = get_connection()
-    ingestion = StructuredDataIngestion(connection)
-    ingestion.run_full_ingestion()
-
-    logger.info("Structured data ingestion completed")
 
 
 def ingest_documents() -> None:
@@ -121,16 +108,13 @@ def run_full_pipeline() -> None:
         # Step 1: Initialize database
         initialize_database()
 
-        # Step 2: Ingest structured data
-        ingest_structured_data()
-
-        # Step 3: Ingest and parse documents
+        # Step 2: Ingest and parse documents
         ingest_documents()
 
-        # Step 4: Extract entities
+        # Step 3: Extract entities
         extract_entities()
 
-        # Step 5: Generate embeddings
+        # Step 4: Generate embeddings
         generate_embeddings()
 
         logger.info("=" * 80)
@@ -261,34 +245,31 @@ def main() -> None:
         print("\nOptions:")
         print("1. Run full ingestion pipeline (initialize + ingest all data)")
         print("2. Initialize database schema only")
-        print("3. Ingest structured data only")
-        print("4. Ingest documents only")
-        print("5. Extract entities only")
-        print("6. Generate embeddings only")
-        print("7. Run example queries")
-        print("8. Interactive query mode")
-        print("9. Exit")
+        print("3. Ingest documents only")
+        print("4. Extract entities only")
+        print("5. Generate embeddings only")
+        print("6. Run example queries")
+        print("7. Interactive query mode")
+        print("8. Exit")
         print("=" * 80)
 
-        choice = input("\nEnter your choice (1-9): ").strip()
+        choice = input("\nEnter your choice (1-8): ").strip()
 
         if choice == "1":
             run_full_pipeline()
         elif choice == "2":
             initialize_database()
         elif choice == "3":
-            ingest_structured_data()
-        elif choice == "4":
             ingest_documents()
-        elif choice == "5":
+        elif choice == "4":
             extract_entities()
-        elif choice == "6":
+        elif choice == "5":
             generate_embeddings()
-        elif choice == "7":
+        elif choice == "6":
             run_example_queries()
-        elif choice == "8":
+        elif choice == "7":
             interactive_query_mode()
-        elif choice == "9":
+        elif choice == "8":
             logger.info("Exiting application")
             return
         else:

@@ -38,6 +38,7 @@ class OpenAIConfig(BaseModel):
 
     api_key: str = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
     model: str = Field(default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4o"))
+    fallback_model: str = Field(default_factory=lambda: os.getenv("OPENAI_FALLBACK_MODEL", "gpt-4o-mini"))
 
     @field_validator("api_key")
     @classmethod
@@ -51,15 +52,21 @@ class OpenAIConfig(BaseModel):
 class DataConfig(BaseModel):
     """Data directory configuration."""
 
-    structured_data_dir: Path = Field(
-        default_factory=lambda: Path(os.getenv("STRUCTURED_DATA_DIR", "./data/structured"))
-    )
     pdf_data_dir: Path = Field(
         default_factory=lambda: Path(os.getenv("PDF_DATA_DIR", "./data/pdfs"))
     )
     output_dir: Path = Field(default_factory=lambda: Path(os.getenv("OUTPUT_DIR", "./output")))
+    rejected_files_dir: Path = Field(
+        default_factory=lambda: Path(os.getenv("REJECTED_FILES_DIR", "./data/rejected_files"))
+    )
+    failed_extractions_dir: Path = Field(
+        default_factory=lambda: Path(os.getenv("FAILED_EXTRACTIONS_DIR", "./data/failed_extractions"))
+    )
+    failed_loads_dir: Path = Field(
+        default_factory=lambda: Path(os.getenv("FAILED_LOADS_DIR", "./data/failed_loads"))
+    )
 
-    @field_validator("structured_data_dir", "pdf_data_dir", "output_dir")
+    @field_validator("pdf_data_dir", "output_dir", "rejected_files_dir", "failed_extractions_dir", "failed_loads_dir")
     @classmethod
     def validate_directories(cls, v: Path) -> Path:
         """Ensure directories exist or can be created."""
@@ -95,58 +102,34 @@ class LoggingConfig(BaseModel):
         return v
 
 
-class FileMapping(BaseModel):
-    """Mapping configuration for a single structured data file."""
+class ExtractionConfig(BaseModel):
+    """Configuration for PAF extraction pipeline."""
 
-    table_name: str = Field(description="Target table name in DuckDB")
-    entity_type: str = Field(description="Entity type for Neo4j ingestion (e.g., 'Person', 'Project')")
-    required_columns: List[str] = Field(
-        default_factory=list,
-        description="List of required column names"
+    prompt_version: str = Field(
+        default_factory=lambda: os.getenv("EXTRACTION_PROMPT_VERSION", "v1.0.0")
+    )
+    enable_model_degradation: bool = Field(
+        default_factory=lambda: os.getenv("ENABLE_MODEL_DEGRADATION", "true").lower() == "true"
+    )
+    retry_max_attempts: int = Field(
+        default_factory=lambda: int(os.getenv("RETRY_MAX_ATTEMPTS", "3"))
+    )
+    retry_backoff_base: int = Field(
+        default_factory=lambda: int(os.getenv("RETRY_BACKOFF_BASE", "2"))
     )
 
 
-class StructuredDataIngestionConfig(BaseModel):
-    """Configuration for structured data ingestion pipeline.
+class QualityConfig(BaseModel):
+    """Configuration for quality thresholds and validation."""
 
-    Replaces brittle heuristic-based table discovery with explicit file-to-table mapping.
-    """
-
-    file_mappings: Dict[str, FileMapping] = Field(
-        default_factory=lambda: {
-            # Default mappings for common file patterns
-            "projects.xlsx": FileMapping(
-                table_name="projects",
-                entity_type="Project",
-                required_columns=["id", "name"]
-            ),
-            "projects.csv": FileMapping(
-                table_name="projects",
-                entity_type="Project",
-                required_columns=["id", "name"]
-            ),
-            "managers.xlsx": FileMapping(
-                table_name="managers",
-                entity_type="Person",
-                required_columns=["name"]
-            ),
-            "managers.csv": FileMapping(
-                table_name="managers",
-                entity_type="Person",
-                required_columns=["name"]
-            ),
-            "teams.xlsx": FileMapping(
-                table_name="teams",
-                entity_type="Team",
-                required_columns=["team_name", "member_name"]
-            ),
-            "teams.csv": FileMapping(
-                table_name="teams",
-                entity_type="Team",
-                required_columns=["team_name", "member_name"]
-            ),
-        },
-        description="Mapping from file names to their DuckDB table configuration"
+    confidence_threshold: float = Field(
+        default_factory=lambda: float(os.getenv("CONFIDENCE_THRESHOLD", "6.0"))
+    )
+    completeness_threshold: float = Field(
+        default_factory=lambda: float(os.getenv("COMPLETENESS_THRESHOLD", "0.8"))
+    )
+    auto_generate_golden_tests: bool = Field(
+        default_factory=lambda: os.getenv("AUTO_GENERATE_GOLDEN_TESTS", "true").lower() == "true"
     )
 
 
@@ -158,9 +141,8 @@ class Settings(BaseModel):
     data: DataConfig = Field(default_factory=DataConfig)
     processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
-    structured_data_ingestion: StructuredDataIngestionConfig = Field(
-        default_factory=StructuredDataIngestionConfig
-    )
+    extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
+    quality: QualityConfig = Field(default_factory=QualityConfig)
 
 
 # Global settings instance

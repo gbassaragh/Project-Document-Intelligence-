@@ -6,7 +6,7 @@ Processes PDF documents (PAFs, SRFs, IFRs) and extracts text content for entity 
 import logging
 import hashlib
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
 from pypdf import PdfReader
